@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
+	"github.com/hetznercloud/hcloud-cloud-controller-manager/internal/hcops"
 	"github.com/hetznercloud/hcloud-go/hcloud"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -29,11 +31,12 @@ import (
 )
 
 type instances struct {
-	client *hcloud.Client
+	client      *hcloud.Client
+	serverCache *hcops.AllServersCache
 }
 
 func newInstances(client *hcloud.Client) *instances {
-	return &instances{client}
+	return &instances{client, &hcops.AllServersCache{LoadFunc: client.Server.All, LoadTimeout: time.Minute * 1, MaxAge: time.Minute * 1}}
 }
 
 func (i *instances) NodeAddressesByProviderID(ctx context.Context, providerID string) ([]v1.NodeAddress, error) {
@@ -44,7 +47,7 @@ func (i *instances) NodeAddressesByProviderID(ctx context.Context, providerID st
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
 
-	server, err := getServerByID(ctx, i.client, id)
+	server, err := i.serverCache.ByID(id)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
@@ -54,7 +57,7 @@ func (i *instances) NodeAddressesByProviderID(ctx context.Context, providerID st
 func (i *instances) NodeAddresses(ctx context.Context, nodeName types.NodeName) ([]v1.NodeAddress, error) {
 	const op = "hcloud/instances.NodeAddresses"
 
-	server, err := getServerByName(ctx, i.client, string(nodeName))
+	server, err := i.serverCache.ByName(string(nodeName))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
@@ -74,7 +77,7 @@ func (i *instances) ExternalID(ctx context.Context, nodeName types.NodeName) (st
 func (i *instances) InstanceID(ctx context.Context, nodeName types.NodeName) (string, error) {
 	const op = "hcloud/instances.InstanceID"
 
-	server, err := getServerByName(ctx, i.client, string(nodeName))
+	server, err := i.serverCache.ByName(string(nodeName))
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
@@ -84,7 +87,7 @@ func (i *instances) InstanceID(ctx context.Context, nodeName types.NodeName) (st
 func (i *instances) InstanceType(ctx context.Context, nodeName types.NodeName) (string, error) {
 	const op = "hcloud/instances.InstanceType"
 
-	server, err := getServerByName(ctx, i.client, string(nodeName))
+	server, err := i.serverCache.ByName(string(nodeName))
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
@@ -99,7 +102,7 @@ func (i *instances) InstanceTypeByProviderID(ctx context.Context, providerID str
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
 
-	server, err := getServerByID(ctx, i.client, id)
+	server, err := i.serverCache.ByID(id)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
@@ -122,7 +125,7 @@ func (i instances) InstanceExistsByProviderID(ctx context.Context, providerID st
 		return false, fmt.Errorf("%s: %w", op, err)
 	}
 
-	server, _, err := i.client.Server.GetByID(ctx, id)
+	server, err := i.serverCache.ByID(id)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", op, err)
 	}
@@ -137,7 +140,8 @@ func (i instances) InstanceShutdownByProviderID(ctx context.Context, providerID 
 		return false, fmt.Errorf("%s: %w", op, err)
 	}
 
-	server, _, err := i.client.Server.GetByID(ctx, id)
+	// TODO refresh cache faster?
+	server, err := i.serverCache.ByID(id)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", op, err)
 	}

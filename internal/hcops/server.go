@@ -23,6 +23,7 @@ type AllServersCache struct {
 	lastRefresh time.Time
 	byPrivIP    map[string]*hcloud.Server
 	byName      map[string]*hcloud.Server
+	byID        map[int]*hcloud.Server
 
 	mu sync.Mutex // protects by* maps
 }
@@ -66,6 +67,25 @@ func (c *AllServersCache) ByName(name string) (*hcloud.Server, error) {
 	return srv, nil
 }
 
+// ByID obtains a server from the cache using the servers name.
+//
+// Note that a pointer to the object stored in the cache is returned. Modifying
+// this object affects the cache and all other code parts holding a reference.
+// Furthermore modifying the returned server is not concurrency safe.
+func (c *AllServersCache) ByID(id int) (*hcloud.Server, error) {
+	const op = "hcops/AllServersCache.ByID"
+
+	srv, err := c.getCache(func() (*hcloud.Server, bool) {
+		srv, ok := c.byID[id]
+		return srv, ok
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return srv, nil
+}
+
 func (c *AllServersCache) getCache(getSrv func() (*hcloud.Server, bool)) (*hcloud.Server, error) {
 	const op = "hcops/AllServersCache.getCache"
 
@@ -76,6 +96,11 @@ func (c *AllServersCache) getCache(getSrv func() (*hcloud.Server, bool)) (*hclou
 	// expired.
 	if srv, ok := getSrv(); ok && !c.isExpired() {
 		return srv, nil
+	}
+
+	// Never fetch all servers unless the cache is expired, for now
+	if !c.isExpired() {
+		return nil, fmt.Errorf("%s: %w (not cached)", op, ErrNotFound)
 	}
 
 	// Reload from the backend API if we didn't find srv.
@@ -94,6 +119,7 @@ func (c *AllServersCache) getCache(getSrv func() (*hcloud.Server, bool)) (*hclou
 	// Re-initialize all maps. This effectively clears the current cache.
 	c.byPrivIP = make(map[string]*hcloud.Server)
 	c.byName = make(map[string]*hcloud.Server)
+	c.byID = make(map[int]*hcloud.Server)
 
 	for _, srv := range srvs {
 		// Index servers by the IPs of their private networks
@@ -106,6 +132,9 @@ func (c *AllServersCache) getCache(getSrv func() (*hcloud.Server, bool)) (*hclou
 
 		// Index servers by their names.
 		c.byName[srv.Name] = srv
+
+		// Index servers by their IDs.
+		c.byID[srv.ID] = srv
 	}
 
 	c.lastRefresh = time.Now()
